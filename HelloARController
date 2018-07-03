@@ -1,0 +1,213 @@
+
+namespace GoogleARCore.Examples.HelloAR
+{
+    using System.Collections.Generic;
+    using GoogleARCore;
+    using GoogleARCore.Examples.Common;
+    using UnityEngine;
+
+#if UNITY_EDITOR
+    
+    using Input = InstantPreviewInput;
+#endif
+
+    
+    public class HelloARController : MonoBehaviour
+    {
+        
+        public Camera FirstPersonCamera;
+		public GameObject RobotBase;
+		public float[] jointValues = new float[6];
+		private GameObject[] jointList = new GameObject[6];
+		private float[] upperLimit = { 180f, 180f, 180f, 180f, 180f, 180f };
+		private float[] lowerLimit = { -180f, -180f, -180f, -180f, -180f, -180f };
+        public GameObject DetectedPlanePrefab;
+		public GameObject AndyAndroidPrefab;
+		public GameObject SearchingForPlaneUI;
+		private const float k_ModelRotation = 180.0f;
+		private List<DetectedPlane> m_AllPlanes = new List<DetectedPlane>();
+		private bool m_IsQuitting = false;
+		bool spawned = false;
+		void Start () {
+			initializeJoints ();
+
+		
+		}
+        public void LateUpdate()
+        {
+            _UpdateApplicationLifecycle();
+
+
+            Session.GetTrackables<DetectedPlane>(m_AllPlanes);
+            bool showSearchingUI = true;
+            for (int i = 0; i < m_AllPlanes.Count; i++)
+            {
+                if (m_AllPlanes[i].TrackingState == TrackingState.Tracking)
+                {
+                    showSearchingUI = false;
+                    break;
+                }
+            }
+
+            SearchingForPlaneUI.SetActive(showSearchingUI);
+
+            
+            Touch touch;
+            if (Input.touchCount < 1 || (touch = Input.GetTouch(0)).phase != TouchPhase.Began)
+            {
+                return;
+            }
+
+            // Raycast against the location the player touched to search for planes.
+            TrackableHit hit;
+            TrackableHitFlags raycastFilter = TrackableHitFlags.PlaneWithinPolygon |
+                TrackableHitFlags.FeaturePointWithSurfaceNormal;
+
+            if (Frame.Raycast(touch.position.x, touch.position.y, raycastFilter, out hit) && spawned == false)
+            {
+				spawned = true;
+				// Use hit pose and camera pose to check if hittest is from the
+                // back of the plane, if it is, no need to create the anchor.
+                if ((hit.Trackable is DetectedPlane) &&
+                    Vector3.Dot(FirstPersonCamera.transform.position - hit.Pose.position,
+                        hit.Pose.rotation * Vector3.up) < 0)
+                {
+                    Debug.Log("Hit at back of the current DetectedPlane");
+                }
+                else
+                {
+                    // Instantiate Andy model at the hit pose.
+                    var andyObject = Instantiate(AndyAndroidPrefab, hit.Pose.position, hit.Pose.rotation);
+
+                    // Compensate for the hitPose rotation facing away from the raycast (i.e. camera).
+                    
+
+                    // Create an anchor to allow ARCore to track the hitpoint as understanding of the physical
+                    // world evolves.
+                    var anchor = hit.Trackable.CreateAnchor(hit.Pose);
+
+                    // Make Andy model a child of the anchor.
+                    andyObject.transform.parent = anchor.transform;
+                }
+			}
+			for ( int i = 0; i < 6; i ++) {
+				Vector3 currentRotation = jointList[i].transform.localEulerAngles;
+				Debug.Log(currentRotation);
+				currentRotation.z = jointValues[i];
+				jointList[i].transform.localEulerAngles = currentRotation;
+			}
+        }
+
+
+		void OnGUI() {
+			int boundary = 20;
+
+			#if UNITY_EDITOR
+			int labelHeight = 20;
+			GUI.skin.label.fontSize = GUI.skin.box.fontSize = GUI.skin.button.fontSize = 20;
+			#else
+			int labelHeight = 40;
+			GUI.skin.label.fontSize = GUI.skin.box.fontSize = GUI.skin.button.fontSize = 40;
+			#endif
+			GUI.skin.label.alignment = TextAnchor.MiddleLeft;
+			for (int i = 0; i < 6; i++) {
+				GUI.Label(new Rect(boundary, boundary + ( i * 2 + 1 ) * labelHeight, labelHeight * 4, labelHeight), "Joint " + i + ": ");
+				jointValues[i] = GUI.HorizontalSlider(new Rect(boundary + labelHeight * 4, boundary + (i * 2 + 1) * labelHeight + labelHeight / 4, labelHeight * 5, labelHeight), jointValues[i], lowerLimit[i], upperLimit[i]);
+
+			}
+		}
+		/// <summary>
+        /// Check and update the application lifecycle.
+        /// </summary>
+        private void _UpdateApplicationLifecycle()
+        {
+            // Exit the app when the 'back' button is pressed.
+            if (Input.GetKey(KeyCode.Escape))
+            {
+                Application.Quit();
+            }
+
+            // Only allow the screen to sleep when not tracking.
+            if (Session.Status != SessionStatus.Tracking)
+            {
+                const int lostTrackingSleepTimeout = 15;
+                Screen.sleepTimeout = lostTrackingSleepTimeout;
+            }
+            else
+            {
+                Screen.sleepTimeout = SleepTimeout.NeverSleep;
+            }
+
+            if (m_IsQuitting)
+            {
+                return;
+            }
+
+            // Quit if ARCore was unable to connect and give Unity some time for the toast to appear.
+            if (Session.Status == SessionStatus.ErrorPermissionNotGranted)
+            {
+                _ShowAndroidToastMessage("Camera permission is needed to run this application.");
+                m_IsQuitting = true;
+                Invoke("_DoQuit", 0.5f);
+            }
+            else if (Session.Status.IsError())
+            {
+                _ShowAndroidToastMessage("ARCore encountered a problem connecting.  Please start the app again.");
+                m_IsQuitting = true;
+                Invoke("_DoQuit", 0.5f);
+            }
+        }
+
+        /// <summary>
+        /// Actually quit the application.
+        /// </summary>
+        private void _DoQuit()
+        {
+            Application.Quit();
+        }
+
+        /// <summary>
+        /// Show an Android toast message.
+        /// </summary>
+        /// <param name="message">Message string to show in the toast.</param>
+		void initializeJoints() {
+			var RobotChildren = RobotBase.GetComponentsInChildren<Transform>();
+			for (int i = 0; i < RobotChildren.Length; i++) {
+				if (RobotChildren[i].name == "control0") {
+					jointList[0] = RobotChildren[i].gameObject;
+				}
+				else if (RobotChildren[i].name == "control1") {
+					jointList[1] = RobotChildren[i].gameObject;
+				}
+				else if (RobotChildren[i].name == "control2") {
+					jointList[2] = RobotChildren[i].gameObject;
+				}
+				else if (RobotChildren[i].name == "control3") {
+					jointList[3] = RobotChildren[i].gameObject;
+				}
+				else if (RobotChildren[i].name == "control4") {
+					jointList[4] = RobotChildren[i].gameObject;
+				}
+				else if (RobotChildren[i].name == "control5") {
+					jointList[5] = RobotChildren[i].gameObject;
+				}
+			}
+		}
+		private void _ShowAndroidToastMessage(string message)
+        {
+            AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+            AndroidJavaObject unityActivity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
+
+            if (unityActivity != null)
+            {
+                AndroidJavaClass toastClass = new AndroidJavaClass("android.widget.Toast");
+                unityActivity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
+                {
+                    AndroidJavaObject toastObject = toastClass.CallStatic<AndroidJavaObject>("makeText", unityActivity,
+                        message, 0);
+                    toastObject.Call("show");
+                }));
+            }
+        }
+    }
+}
